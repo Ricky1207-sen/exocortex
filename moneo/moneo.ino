@@ -42,7 +42,7 @@ void setup() {
     Serial.println("╚══════════════════════════════════╝");
 
     pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, LOW);
+    digitalWrite(LED_BUILTIN, LED_OFF);
 
     // TODO: detect AI provider once AIClient is integrated
     // if (!aiClient.begin()) {
@@ -87,9 +87,9 @@ void _processRecording(const String& wavPath) {
     Serial.println("[Moneo] Recording complete. Connecting to WiFi...");
 
     // Blink LED while connecting
-    digitalWrite(LED_BUILTIN, HIGH);
+    digitalWrite(LED_BUILTIN, LED_ON);
     delay(200);
-    digitalWrite(LED_BUILTIN, LOW);
+    digitalWrite(LED_BUILTIN, LED_OFF);
 
     if (!wifiMgr.connect()) {
         Serial.println("[Moneo] WiFi failed.");
@@ -125,7 +125,7 @@ void _processRecording(const String& wavPath) {
 
 void _errorBlink() {
     while (true) {
-        digitalWrite(LED_BUILTIN, HIGH); delay(200);
-        digitalWrite(LED_BUILTIN, LOW);  delay(200);
+        digitalWrite(LED_BUILTIN, LED_ON);  delay(200);
+        digitalWrite(LED_BUILTIN, LED_OFF); delay(200);
     }
 }

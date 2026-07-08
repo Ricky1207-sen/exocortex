@@ -178,7 +178,7 @@ void Recorder::_startRecording() {
     f.close();
 
     _segmentStartMs = millis();
-    digitalWrite(LED_BUILTIN, HIGH);
+    digitalWrite(LED_BUILTIN, LED_ON);
 
     xTaskCreatePinnedToCore(_captureTaskEntry, "Capture", 4096,
                             this, 5, &_captureTask_h, 1);
@@ -194,7 +194,7 @@ void Recorder::_stopRecording() {
     _recording  = false;
     _stopWriter = true;
 
-    digitalWrite(LED_BUILTIN, LOW);
+    digitalWrite(LED_BUILTIN, LED_OFF);
 
     // Give the capture + writer tasks time to exit.
     vTaskDelay(pdMS_TO_TICKS(3000));

@@ -11,6 +11,12 @@ const int SD_CARD_PIN     = 21;
 const int I2S_BCLK_PIN    = 42;
 const int I2S_LRCLK_PIN   = 41;
 
+// ─── STATUS LED ──────────────────────────────────────────────
+// The XIAO ESP32-S3 user LED is active-LOW: driving the pin LOW lights it,
+// HIGH turns it off. Use these names so the polarity is never guessed again.
+#define LED_ON   LOW
+#define LED_OFF  HIGH
+
 // ─── TOUCH SENSOR ────────────────────────────────────────────
 const int          TOUCH_THRESHOLD  = 50000;
 const unsigned long DEBOUNCE_DELAY  = 5000;
