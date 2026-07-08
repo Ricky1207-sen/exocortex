@@ -19,7 +19,7 @@ const int I2S_LRCLK_PIN   = 41;
 
 // ─── TOUCH SENSOR ────────────────────────────────────────────
 const int          TOUCH_THRESHOLD  = 50000;
-const unsigned long DEBOUNCE_DELAY  = 5000;
+const unsigned long DEBOUNCE_DELAY  = 1000;
 
 // ─── STARTUP ─────────────────────────────────────────────────
 const unsigned long SERIAL_WAIT_MS = 100;   // max wait for USB serial at boot
