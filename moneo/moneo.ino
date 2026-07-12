@@ -26,7 +26,9 @@ Recorder    recorder;
 WiFiManager wifiMgr;
 // AIClient aiClient;       // TODO: enable when AIClient is added
 
-bool _wasRecording = false;
+// The device is always in exactly one of these states.
+enum AppState { STATE_IDLE, STATE_RECORDING, STATE_PROCESSING };
+AppState _state = STATE_IDLE;
 
 void IRAM_ATTR onTouch() {
     recorder.requestToggle();
@@ -61,26 +63,42 @@ void setup() {
 }
 
 void loop() {
-    recorder.loop();
+    recorder.loop();   // services the touch button; may start/stop the recorder
 
-    // Detect transition: was recording → stopped
-    bool nowRecording = recorder.isRecording();
-    if (_wasRecording && !nowRecording) {
-        if (recorder.hasError()) {
-            // Recording failed mid-way (SD write error). The partial file was
-            // finalized; signal the failure instead of treating it as success.
-            Serial.println("[Moneo] Recording FAILED (SD write error). File may be incomplete.");
-            _errorBlink();   // halts here, blinking the LED
-        }
-        // Recording just stopped — process it
-        String wavPath = recorder.lastRecordingPath();
-        if (wavPath.length() > 0) {
-            _processRecording(wavPath);
-        }
+    switch (_state) {
+        case STATE_IDLE:
+            // Waiting for a touch. The recorder starting up moves us on.
+            if (recorder.isRecording()) _state = STATE_RECORDING;
+            break;
+
+        case STATE_RECORDING:
+            // Recording. When it stops, go process what was captured.
+            if (!recorder.isRecording()) _state = STATE_PROCESSING;
+            break;
+
+        case STATE_PROCESSING:
+            // Do the (slow) WiFi work once, then return to idle.
+            _handleRecording();
+            _state = STATE_IDLE;
+            break;
     }
-    _wasRecording = nowRecording;
 
-    delay(10);
+    delay(100);
+}
+
+// Runs once per recording, in the PROCESSING state.
+void _handleRecording() {
+    if (recorder.hasError()) {
+        // Write failed mid-way; the partial file was finalized. Signal it.
+        Serial.println("[Moneo] Recording FAILED (SD write error). File may be incomplete.");
+        _errorBlink();   // halts here, blinking the LED
+        return;
+    }
+
+    String wavPath = recorder.lastRecordingPath();
+    if (wavPath.length() > 0) {
+        _processRecording(wavPath);
+    }
 }
 
 void _processRecording(const String& wavPath) {
