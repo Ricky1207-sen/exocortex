@@ -35,6 +35,13 @@ const int I2S_BUFFER_SIZE = 512;
 const unsigned long SEGMENT_DURATION_MS = 10000;  // 10 seconds per segment
 const size_t PSRAM_BUFFER_SIZE = 160000;           // 10s * 16000Hz * 1 byte = 160KB
 
+// ─── TIME / NTP ──────────────────────────────────────────────
+// Clock is synced once at boot (after WiFi). The ESP32's internal RTC keeps
+// time on its own afterwards, so no repeat NTP requests are needed.
+#define NTP_SERVER  "pool.ntp.org"
+const long GMT_OFFSET_SEC      = 19800;   // UTC+5:30 (IST)
+const int  DAYLIGHT_OFFSET_SEC = 0;
+
 // ─── WIFI — add as many networks as needed ───────────────────
 // Format: { "SSID", "PASSWORD" }
 // Device tries each in order, connects to first available

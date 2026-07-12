@@ -161,10 +161,8 @@ void Recorder::_startRecording() {
     _bufFill[0]  = 0;
     _bufFill[1]  = 0;
 
-    // Try NTP time sync
-    configTime(19800, 0, "pool.ntp.org");  // UTC+5:30 for IST
-    delay(500);
-
+    // Clock was already synced once at boot (see _syncTime in the main sketch),
+    // so _generateFilename() reads the real time straight from the RTC here.
     _wavPath = _generateFilename();
     DLOGF("[Recorder] File: %s\n", _wavPath.c_str());
 

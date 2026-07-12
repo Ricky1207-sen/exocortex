@@ -59,7 +59,28 @@ void setup() {
     }
 
     touchAttachInterrupt(TOUCH_PIN, onTouch, TOUCH_THRESHOLD);
+
+    // Sync the clock once, now, while we can reach the network. After this the
+    // ESP32's internal RTC keeps time on its own — no repeat NTP requests.
+    _syncTime();
     // recorder.begin() already logged the "ready / touch to start" message.
+}
+
+// Connect WiFi once and sync the clock. If WiFi isn't available, recordings
+// just fall back to uptime-based filenames — not fatal.
+void _syncTime() {
+    Serial.println("[Time] Connecting WiFi to sync clock...");
+    if (!wifiMgr.connect()) {
+        Serial.println("[Time] WiFi unavailable — using uptime-based names.");
+        return;
+    }
+    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+    struct tm t;
+    if (getLocalTime(&t, 5000)) {
+        Serial.println("[Time] Clock synced.");
+    } else {
+        Serial.println("[Time] NTP sync failed — using uptime-based names.");
+    }
 }
 
 void loop() {
