@@ -1,4 +1,6 @@
 #include "Recorder.h"
+#include <SD.h>
+#include <FS.h>
 #include <time.h>
 
 // Sentinel index posted to _flushQueue to tell the writer "no more buffers,
