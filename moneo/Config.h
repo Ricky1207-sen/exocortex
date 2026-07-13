@@ -31,8 +31,9 @@ const int NUM_CHANNELS    = 1;
 const int I2S_BUFFER_SIZE = 512;
 
 // ─── RECORDING SETTINGS ──────────────────────────────────────
-// Each segment is buffered in PSRAM then appended to the single WAV file
-const unsigned long SEGMENT_DURATION_MS = 10000;  // 10 seconds per segment
+// Audio is captured into PSRAM buffers, then appended to the single WAV file.
+// The buffer size sets how much audio each save holds (a full buffer = one
+// save), so it also determines the segment length.
 const size_t PSRAM_BUFFER_SIZE = 160000;           // 10s * 16000Hz * 1 byte = 160KB
 
 // ─── TIME / NTP ──────────────────────────────────────────────
