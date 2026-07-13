@@ -76,20 +76,22 @@ void IRAM_ATTR Recorder::requestToggle() {
     _toggleRequested = true;
 }
 
+// The main sketch owns the clock (synced once at boot) and hands us the current
+// time, so we make no network request here.
+extern time_t currentEpoch();
+
 // ── Generate datetime filename ─────────────────────────────
 String Recorder::_generateFilename() {
-    // Try to get real time from NTP if available
-    // Fall back to millis-based name if no time sync
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 1000)) {
+    time_t now = currentEpoch();
+    if (now > 0) {
+        struct tm* lt = localtime(&now);
         char buf[32];
-        strftime(buf, sizeof(buf), "/rec_%Y%m%d_%H%M%S.wav", &timeinfo);
+        strftime(buf, sizeof(buf), "/rec_%Y%m%d_%H%M%S.wav", lt);
         return String(buf);
     }
 
-    // Fallback: use millis
-    unsigned long ms = millis();
-    unsigned long secs = ms / 1000;
+    // Fallback: clock never synced — use an uptime-based name.
+    unsigned long secs = millis() / 1000;
     char buf[32];
     snprintf(buf, sizeof(buf), "/rec_%05lu.wav", secs);
     return String(buf);

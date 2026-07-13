@@ -20,6 +20,7 @@
 #include "Config.h"
 #include "Recorder.h"
 #include "WiFiManager.h"
+#include <time.h>
 // #include "AIClient.h"   // TODO: enable when AIClient is added
 
 Recorder    recorder;
@@ -29,6 +30,12 @@ WiFiManager wifiMgr;
 // The device is always in exactly one of these states.
 enum AppState { STATE_IDLE, STATE_RECORDING, STATE_PROCESSING };
 AppState _state = STATE_IDLE;
+
+// Manual clock: captured once at NTP sync, then the current time is computed as
+// (synced time + elapsed millis) — no further network requests are ever made.
+time_t        _syncedEpoch    = 0;   // real epoch captured at the moment of sync
+unsigned long _lastSyncMillis = 0;   // millis() at that same moment
+bool          _timeSynced     = false;
 
 void IRAM_ATTR onTouch() {
     recorder.requestToggle();
@@ -77,10 +84,21 @@ void _syncTime() {
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
     struct tm t;
     if (getLocalTime(&t, 5000)) {
+        _syncedEpoch    = time(nullptr);   // remember the real time...
+        _lastSyncMillis = millis();        // ...and when we got it
+        _timeSynced     = true;
         Serial.println("[Time] Clock synced.");
     } else {
         Serial.println("[Time] NTP sync failed — using uptime-based names.");
     }
+}
+
+// Current epoch, computed from the single sync plus elapsed time — no network
+// request. Returns 0 if the clock was never synced (caller falls back to an
+// uptime-based name).
+time_t currentEpoch() {
+    if (!_timeSynced) return 0;
+    return _syncedEpoch + (time_t)((millis() - _lastSyncMillis) / 1000);
 }
 
 void loop() {
