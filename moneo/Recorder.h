@@ -30,16 +30,14 @@ class Recorder {
 public:
     Recorder();
     bool begin();
-    void loop();
-    void IRAM_ATTR requestToggle();
+    void startRecording();
+    void stopRecording();
 
     bool isRecording() const { return _recording; }
     bool hasError() const { return _writeError; }
     String lastRecordingPath() const { return _wavPath; }
 
 private:
-    void _startRecording();
-    void _stopRecording();
     void _writeWavHeader(File& f, uint32_t dataLen);
     void _finalizeHeader();
     bool _writeBufferToSD(uint8_t* data, size_t len);
@@ -63,9 +61,7 @@ private:
     uint32_t _dataLength;
 
     volatile bool _recording;
-    volatile bool _toggleRequested;
     volatile bool _writeError;
-    unsigned long _lastToggleTime;
 
     QueueHandle_t     _flushQueue;   // capture → writer: "buffer N is ready to save"
     SemaphoreHandle_t _writerDone;   // writer → stop path: "I've drained and exited"

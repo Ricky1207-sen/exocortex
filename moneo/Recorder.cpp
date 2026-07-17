@@ -9,8 +9,7 @@ static const int FLUSH_STOP = -1;
 
 Recorder::Recorder()
     : _activeBuf(0), _dataLength(0),
-      _recording(false), _toggleRequested(false), _writeError(false),
-      _lastToggleTime(0),
+      _recording(false), _writeError(false),
       _flushQueue(nullptr), _writerDone(nullptr)
 {
     _buf[0] = nullptr; _buf[1] = nullptr;
@@ -51,31 +50,6 @@ bool Recorder::begin() {
 
     DLOG("[Recorder] Ready. Touch pin to start.");
     return true;
-}
-
-void Recorder::loop() {
-    if (!_toggleRequested) return;
-    _toggleRequested = false;
-
-    unsigned long now = millis();
-    if (now - _lastToggleTime < DEBOUNCE_DELAY) return;
-
-    // Confirm a real touch is still present. The interrupt can fire on brief
-    // electrical noise; a genuine press is still held when we reach here (reads
-    // above threshold), while a noise spike has already decayed and is rejected.
-    if (touchRead(TOUCH_PIN) < TOUCH_THRESHOLD) return;
-
-    _lastToggleTime = now;
-
-    if (!_recording) {
-        _startRecording();
-    } else {
-        _stopRecording();
-    }
-}
-
-void IRAM_ATTR Recorder::requestToggle() {
-    _toggleRequested = true;
 }
 
 // The main sketch owns the clock (synced once at boot) and hands us the current
@@ -157,7 +131,7 @@ bool Recorder::_writeBufferToSD(uint8_t* data, size_t len) {
 }
 
 // ── Start ──────────────────────────────────────────────────
-void Recorder::_startRecording() {
+void Recorder::startRecording() {
     DLOG("[Recorder] Starting...");
     _writeError  = false;
     _dataLength  = 0;
@@ -190,7 +164,7 @@ void Recorder::_startRecording() {
 }
 
 // ── Stop ───────────────────────────────────────────────────
-void Recorder::_stopRecording() {
+void Recorder::stopRecording() {
     DLOG("[Recorder] Stopping...");
     _recording = false;      // capture finishes its current chunk, then exits
     digitalWrite(LED_BUILTIN, LED_OFF);
@@ -285,6 +259,6 @@ void Recorder::_writerTask() {
     }
 
     DLOG("[Writer] Task finished.");
-    xSemaphoreGive(_writerDone);   // let _stopRecording() proceed
+    xSemaphoreGive(_writerDone);   // let stopRecording() proceed
     vTaskDelete(nullptr);
 }

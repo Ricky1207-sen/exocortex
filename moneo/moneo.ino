@@ -19,11 +19,13 @@
 
 #include "Config.h"
 #include "Recorder.h"
+#include "TouchButton.h"
 #include "WiFiManager.h"
 #include <time.h>
 // #include "AIClient.h"   // TODO: enable when AIClient is added
 
 Recorder    recorder;
+TouchButton button;
 WiFiManager wifiMgr;
 // AIClient aiClient;       // TODO: enable when AIClient is added
 
@@ -36,10 +38,6 @@ AppState _state = STATE_IDLE;
 time_t        _syncedEpoch    = 0;   // real epoch captured at the moment of sync
 unsigned long _lastSyncMillis = 0;   // millis() at that same moment
 bool          _timeSynced     = false;
-
-void IRAM_ATTR onTouch() {
-    recorder.requestToggle();
-}
 
 void setup() {
     Serial.begin(115200);
@@ -65,7 +63,7 @@ void setup() {
         _errorBlink();
     }
 
-    touchAttachInterrupt(TOUCH_PIN, onTouch, TOUCH_THRESHOLD);
+    button.begin(TOUCH_PIN, TOUCH_THRESHOLD, DEBOUNCE_DELAY);
 
     // Sync the clock once, now, while we can reach the network. After this the
     // ESP32's internal RTC keeps time on its own — no repeat NTP requests.
@@ -102,7 +100,10 @@ time_t currentEpoch() {
 }
 
 void loop() {
-    recorder.loop();   // services the touch button; may start/stop the recorder
+    // A touch toggles recording on/off.
+    if (button.pressed()) {
+        recorder.isRecording() ? recorder.stopRecording() : recorder.startRecording();
+    }
 
     switch (_state) {
         case STATE_IDLE:
