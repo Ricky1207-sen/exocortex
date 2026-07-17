@@ -100,20 +100,23 @@ time_t currentEpoch() {
 }
 
 void loop() {
-    // A touch toggles recording on/off.
-    if (button.pressed()) {
-        recorder.isRecording() ? recorder.stopRecording() : recorder.startRecording();
-    }
-
+    // _state is the single source of truth for the lifecycle. A touch drives
+    // the transitions; we don't mirror the recorder's internal flag here.
     switch (_state) {
         case STATE_IDLE:
-            // Waiting for a touch. The recorder starting up moves us on.
-            if (recorder.isRecording()) _state = STATE_RECORDING;
+            // Idle until a touch starts a recording.
+            if (button.pressed()) {
+                recorder.startRecording();
+                _state = STATE_RECORDING;
+            }
             break;
 
         case STATE_RECORDING:
-            // Recording. When it stops, go process what was captured.
-            if (!recorder.isRecording()) _state = STATE_PROCESSING;
+            // Recording until the next touch stops it.
+            if (button.pressed()) {
+                recorder.stopRecording();
+                _state = STATE_PROCESSING;
+            }
             break;
 
         case STATE_PROCESSING:
