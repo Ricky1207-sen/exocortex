@@ -43,8 +43,6 @@ private:
     bool _writeBufferToSD(uint8_t* data, size_t len);
     String _generateFilename();
 
-    static void _captureTaskEntry(void* arg);
-    static void _writerTaskEntry(void* arg);
     void _captureTask();
     void _writerTask();
 

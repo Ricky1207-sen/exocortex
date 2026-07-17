@@ -157,8 +157,10 @@ void Recorder::startRecording() {
     _recording = true;
     digitalWrite(LED_BUILTIN, LED_ON);
 
-    xTaskCreatePinnedToCore(_captureTaskEntry, "Capture", 4096, this, 5, nullptr, 1);
-    xTaskCreatePinnedToCore(_writerTaskEntry,  "Writer",  8192, this, 3, nullptr, 1);
+    xTaskCreatePinnedToCore([](void* arg){ ((Recorder*)arg)->_captureTask(); },
+                            "Capture", 4096, this, 5, nullptr, 1);
+    xTaskCreatePinnedToCore([](void* arg){ ((Recorder*)arg)->_writerTask(); },
+                            "Writer",  8192, this, 3, nullptr, 1);
 
     DLOG("[Recorder] Recording started.");
 }
@@ -197,10 +199,6 @@ void Recorder::_finalizeHeader() {
 }
 
 // ── Capture task ───────────────────────────────────────────
-void Recorder::_captureTaskEntry(void* arg) {
-    ((Recorder*)arg)->_captureTask();
-}
-
 void Recorder::_captureTask() {
     DLOG("[Capture] Task started.");
 
@@ -237,10 +235,6 @@ void Recorder::_captureTask() {
 }
 
 // ── Writer task ────────────────────────────────────────────
-void Recorder::_writerTaskEntry(void* arg) {
-    ((Recorder*)arg)->_writerTask();
-}
-
 void Recorder::_writerTask() {
     DLOG("[Writer] Task started.");
 
