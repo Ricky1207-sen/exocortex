@@ -47,8 +47,6 @@ bool Recorder::begin() {
     }
     DLOGF("[Recorder] I2S initialized (%d Hz, %d-bit).\n",
           SAMPLE_RATE, BITS_PER_SAMPLE);
-
-    DLOG("[Recorder] Ready. Touch pin to start.");
     return true;
 }
 

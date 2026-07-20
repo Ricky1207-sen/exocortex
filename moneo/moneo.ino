@@ -68,7 +68,8 @@ void setup() {
     // Sync the clock once, now, while we can reach the network. After this the
     // ESP32's internal RTC keeps time on its own — no repeat NTP requests.
     _syncTime();
-    // recorder.begin() already logged the "ready / touch to start" message.
+
+    Serial.println("[Moneo] Ready. Touch pin to start.");   // now truly ready
 }
 
 // Connect WiFi once and sync the clock. If WiFi isn't available, recordings
