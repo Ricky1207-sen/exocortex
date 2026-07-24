@@ -9,6 +9,7 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
+#include <time.h>
 #include "Config.h"
 
 // ============================================================
@@ -30,7 +31,7 @@ class Recorder {
 public:
     Recorder();
     bool begin();
-    void startRecording();
+    void startRecording(time_t now = 0);
     void stopRecording();
 
     bool isRecording() const { return _recording; }
@@ -41,7 +42,7 @@ private:
     void _writeWavHeader(File& f, uint32_t dataLen);
     void _finalizeHeader();
     bool _writeBufferToSD(uint8_t* data, size_t len);
-    String _generateFilename();
+    String _generateFilename(time_t now);
 
     void _captureTask();
     void _writerTask();
@@ -63,6 +64,9 @@ private:
 
     QueueHandle_t     _flushQueue;   // capture → writer: "buffer N is ready to save"
     SemaphoreHandle_t _writerDone;   // writer → stop path: "I've drained and exited"
+
+    TaskHandle_t _captureTask_h;
+    TaskHandle_t _writerTask_h;
 };
 
 #endif

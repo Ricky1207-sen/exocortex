@@ -5,15 +5,17 @@
 
 Second-stage runtime for Manas: **Moneo**&mdash;*The Meek Mnemonic Majordomo!*
 
-A smart wearable audio recorder that captures a continuous, unbroken session to a single WAV file using the device's PSRAM as a streaming ring buffer, then transcribes the recording via a remote LLM API and saves the transcript alongside the audio. Both files can optionally be uploaded to a remote storage server for downstream retrieval and agentic integration.
+A smart wearable audio recorder that captures a continuous, unbroken session to a single WAV file using the device's PSRAM as a ping-pong double buffer, then transcribes the recording via a remote LLM API and saves the transcript alongside the audio. Both files can optionally be uploaded to a remote storage server for downstream retrieval and agentic integration.
 
 ## ✨ Features
 
-- **Continuous Recording**: PSRAM ring buffer (~16s of audio) flushes incrementally to a single WAV file per session — no 1-minute segment splits, no data fragmentation.
-- **Datetime Filenames**: NTP time is fetched on boot; recordings are named in Android media format (`YYYYMMDD_HHMMSS.wav`). Falls back to uptime-based names if NTP is unavailable.
+- **Continuous Recording**: Two PSRAM ping-pong buffers (2 × 10 s of 16 kHz 8-bit mono PCM) flush incrementally to a single WAV file — capture never pauses while the other buffer saves to SD. Power-loss safe: at most the last 10-second segment is at risk.
+- **Datetime Filenames**: NTP time is fetched at boot (WiFi disconnected immediately after); recordings are named `rec_YYYYMMDD_HHMMSS.wav` in the SD root. Falls back to `rec_NNNNN.wav` (uptime seconds) if NTP is unavailable.
 - **LLM Transcription**: After a session ends, the WAV file is POST-ed to a configurable OpenAI-compatible Whisper endpoint. The returned transcript is written as a Markdown file at the same path (`.wav` → `.md`).
 - **NVS Configuration**: All runtime parameters (WiFi credentials, API endpoints, pin assignments) live in ESP32 Non-Volatile Storage via the `Preferences` library, organised by namespace. Seeding NVS is as simple as dropping a `config.json` on the SD card — updating existing config is just the same.
-- **Multi-WiFi Support**: Multiple WiFi networks stored in NVS (home, office, hotspot, etc.); the device tries each in order.
+- **Multi-WiFi Support**: Multiple WiFi networks provisioned in `Config.h` (home, office, hotspot, etc.); WiFiMulti connects to the strongest available signal. NVS-backed credentials are on the roadmap.
+- **Non-blocking Processing**: After a session ends, transcription and upload run in a background FreeRTOS task pinned to core 0 — the device is immediately ready for the next recording.
+- **RF-safe Recording**: WiFi stays off during capture to avoid I2S/radio interference; it is reconnected on demand only for post-processing.
 - **Optional Cloud Sync**: Both the WAV and Markdown files can be uploaded to a remote file server after transcription.
 - **Touch Control**: Capacitive touch start/stop, same as Marci.
 - **Visual Feedback**: LED on during recording, off at idle.
@@ -32,7 +34,7 @@ Same base as Marci — PSRAM is now actively required:
 ### Data Flow
 
 ```
-[PDM Mic] → I2S → [PSRAM ring buffer] → (flush) → [SD: session.wav]
+[PDM Mic] → I2S → [PSRAM ping-pong buffer] → (flush) → [SD: session.wav]
                                                           ↓  (on session end)
                                                [LLM API] → [SD: session.md]
                                                           ↓  (optional)
@@ -46,8 +48,9 @@ Same base as Marci — PSRAM is now actively required:
 - Board: `Seeed Studio XIAO ESP32S3`
 - PSRAM: `Tools → PSRAM → OPI PSRAM` (**required**)
 - Libraries to install via Library Manager:
-  - `ArduinoJson` (for `config.json` and LLM response parsing)
-- Built-in (no install needed): `WiFi`, `SD`, `ESP_I2S`, `HTTPClient`, `WiFiClientSecure`, `Preferences`, `time.h`
+  - `ArduinoJson` — needed once config loading and LLM response parsing are enabled
+- Built-in (no install needed, currently used): `WiFi`, `SD`, `ESP_I2S`, `time.h`
+- Built-in (no install needed, required once upload/transcription is enabled): `HTTPClient`, `WiFiClientSecure`, `Preferences`
 - Serial Monitor: 115200 baud
 
 ### 2. NVS Configuration via `config.json`
@@ -81,8 +84,8 @@ Top-level keys are **NVS namespace names**. Each namespace holds its own structu
     "path": "/recordings"
   },
   "device": {
-    "touch_pin": 2,
-    "touch_thresh": 40,
+    "touch_pin": 1,
+    "touch_thresh": 50000,
     "auto_transcribe": true,
     "auto_upload": false
   }
@@ -92,23 +95,22 @@ Top-level keys are **NVS namespace names**. Each namespace holds its own structu
 ### 3. Flash and Run
 
 1. Compile and upload `moneo.ino`
-2. On boot: device checks for PSRAM, initializes SD, loads `config.json` into NVS if present, initializes I2S, attempts NTP sync
+2. On boot: device initializes SD, allocates PSRAM buffers, initializes I2S, then briefly connects WiFi to sync the clock via NTP and immediately disconnects
 3. Touch the pin to start recording (LED turns on)
 4. Talk — audio streams continuously to a single WAV file on the SD card
 5. Touch again to stop (LED turns off); transcription and optional upload begin
 
 ## 📁 SD Card Structure
 
-The SD card root holds the optional config file; recordings live in a flat `/recordings/` directory:
+Recordings are written directly to the SD card root:
 
 ```
 /
-  ├── config.json           ← optional; consumed on boot and renamed to config.bak
-  └── recordings/
-        ├── 20260528_091523.wav   ← continuous audio for the session
-        ├── 20260528_091523.md    ← LLM transcript (written after session ends)
-        ├── 20260528_143210.wav
-        └── 20260528_143210.md
+  ├── config.json                   ← optional; consumed on boot, renamed to config.bak
+  ├── rec_20260528_091523.wav       ← continuous audio for the session
+  ├── rec_20260528_091523.md        ← LLM transcript (written after session ends)
+  ├── rec_20260528_143210.wav
+  └── rec_20260528_143210.md
 ```
 
 ## 🌐 LLM API

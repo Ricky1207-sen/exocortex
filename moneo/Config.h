@@ -26,30 +26,31 @@ const unsigned long SERIAL_WAIT_MS = 100;   // max wait for USB serial at boot
 
 // ─── AUDIO SETTINGS ──────────────────────────────────────────
 const int SAMPLE_RATE     = 16000;
-const int BITS_PER_SAMPLE = 8;        // 8-bit audio
+const int BITS_PER_SAMPLE = 8;
 const int NUM_CHANNELS    = 1;
 const int I2S_BUFFER_SIZE = 512;
 
 // ─── RECORDING SETTINGS ──────────────────────────────────────
-// Audio is captured into PSRAM buffers, then appended to the single WAV file.
-// The buffer size sets how much audio each save holds (a full buffer = one
-// save), so it also determines the segment length.
-const size_t PSRAM_BUFFER_SIZE = 160000;           // 10s * 16000Hz * 1 byte = 160KB
+// Each PSRAM buffer holds exactly SEGMENT_DURATION_S of audio. When full, it
+// is handed to the writer while capture continues into the other (ping-pong).
+const unsigned int SEGMENT_DURATION_S = 10;
+const size_t       PSRAM_BUFFER_SIZE  = (size_t)SAMPLE_RATE
+                                       * NUM_CHANNELS
+                                       * (BITS_PER_SAMPLE / 8)
+                                       * SEGMENT_DURATION_S;
 
 // ─── TIME / NTP ──────────────────────────────────────────────
-// Clock is synced once at boot (after WiFi). The ESP32's internal RTC keeps
-// time on its own afterwards, so no repeat NTP requests are needed.
+// Clock is synced once at boot (after WiFi), then WiFi is disconnected.
+// The ESP32's RTC tracks time from that point; no repeat NTP requests needed.
 #define NTP_SERVER  "pool.ntp.org"
-const long GMT_OFFSET_SEC      = 19800;   // UTC+5:30 (IST)
+const long GMT_OFFSET_SEC      = 0;       // UTC; adjust for local timezone
 const int  DAYLIGHT_OFFSET_SEC = 0;
 
 // ─── WIFI — add as many networks as needed ───────────────────
 // Format: { "SSID", "PASSWORD" }
-// Device tries each in order, connects to first available
 #define WIFI_NETWORK_COUNT 2
 extern const char* WIFI_NETWORKS[WIFI_NETWORK_COUNT][2];
-const unsigned long WIFI_CONNECT_TIMEOUT_MS  = 10000;
-const unsigned long WIFI_RECONNECT_INTERVAL  = 5000;
+const unsigned long WIFI_CONNECT_TIMEOUT_MS = 10000;
 
 // ─── AI API — auto-detected from key prefix ──────────────────
 // Paste your own API key here. Provider is detected automatically:

@@ -6,15 +6,14 @@
 //  PSRAM:  Tools → PSRAM → OPI PSRAM  ← MUST ENABLE
 //
 //  Flow:
+//    Boot: connect WiFi → sync clock → disconnect WiFi
 //    Touch D1 → start recording (LED ON)
-//    Speak for as long as needed (10s segments flushed to SD)
-//    Touch D1 → stop recording (LED OFF)
-//    Device connects to WiFi (WiFiMulti picks the strongest known network)
-//    WAV file is saved on the SD card
+//    Speak; 10-second ping-pong segments flush to SD without pausing capture
+//    Touch D1 → stop recording → device immediately ready for next recording
+//    Background: reconnect WiFi → upload / transcribe → disconnect WiFi
 //
-//  NOTE: AI note-generation (AIClient) is not part of this build yet. Those
-//  lines are commented out and marked TODO; they will be wired in once
-//  AIClient is added to the repo.
+//  NOTE: AI note-generation (AIClient) is not wired in yet — those lines are
+//  commented out and marked TODO; enabled once AIClient is added to the repo.
 // ============================================================
 
 #include "Config.h"
@@ -29,9 +28,8 @@ TouchButton button;
 WiFiManager wifiMgr;
 // AIClient aiClient;       // TODO: enable when AIClient is added
 
-// The device is always in exactly one of these states.
-enum AppState { STATE_IDLE, STATE_RECORDING, STATE_PROCESSING };
-AppState _state = STATE_IDLE;
+// Queue of WAV paths pending upload/transcription (see _processorLoop).
+QueueHandle_t _procQueue;
 
 // Manual clock: captured once at NTP sync, then the current time is computed as
 // (synced time + elapsed millis) — no further network requests are ever made.
@@ -52,12 +50,8 @@ void setup() {
     digitalWrite(LED_BUILTIN, LED_OFF);
 
     // TODO: detect AI provider once AIClient is integrated
-    // if (!aiClient.begin()) {
-    //     Serial.println("[FATAL] AI client init failed. Check API key in Config.h");
-    //     _errorBlink();
-    // }
+    // if (!aiClient.begin()) { Serial.println("[FATAL] AI client init failed."); _errorBlink(); }
 
-    // Init recorder
     if (!recorder.begin()) {
         Serial.println("[FATAL] Recorder init failed.");
         _errorBlink();
@@ -65,129 +59,114 @@ void setup() {
 
     button.begin(TOUCH_PIN, TOUCH_THRESHOLD, DEBOUNCE_DELAY);
 
-    // Sync the clock once, now, while we can reach the network. After this the
-    // ESP32's internal RTC keeps time on its own — no repeat NTP requests.
-    _syncTime();
+    _syncTime();   // connect WiFi, sync RTC, disconnect
 
-    Serial.println("[Moneo] Ready. Touch pin to start.");   // now truly ready
+    // Processor task (core 0) handles post-recording upload in the background.
+    _procQueue = xQueueCreate(4, sizeof(String*));
+    xTaskCreatePinnedToCore([](void*){ _processorLoop(); },
+                            "Processor", 8192, nullptr, 2, nullptr, 0);
 }
 
-// Connect WiFi once and sync the clock. If WiFi isn't available, recordings
-// just fall back to uptime-based filenames — not fatal.
+void loop() {
+    if (button.pressed()) {
+        if (!recorder.isRecording()) {
+            recorder.startRecording(currentEpoch());
+        } else {
+            recorder.stopRecording();
+            _enqueueProcessing(recorder.lastRecordingPath());
+        }
+    }
+    delay(100);
+}
+
+// Syncs RTC once at boot; WiFi is disconnected immediately after (stays off
+// during recording to avoid RF interference). Falls back to uptime filenames.
 void _syncTime() {
-    Serial.println("[Time] Connecting WiFi to sync clock...");
+    DLOG("[Time] Syncing clock...");
     if (!wifiMgr.connect()) {
-        Serial.println("[Time] WiFi unavailable — using uptime-based names.");
+        DLOG("[Time] WiFi unavailable — filenames will use uptime.");
         return;
     }
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
     struct tm t;
     if (getLocalTime(&t, 5000)) {
-        _syncedEpoch    = time(nullptr);   // remember the real time...
-        _lastSyncMillis = millis();        // ...and when we got it
+        _syncedEpoch    = time(nullptr);
+        _lastSyncMillis = millis();
         _timeSynced     = true;
-        Serial.println("[Time] Clock synced.");
+        DLOG("[Time] Clock synced.");
     } else {
-        Serial.println("[Time] NTP sync failed — using uptime-based names.");
+        DLOG("[Time] NTP failed — filenames will use uptime.");
     }
+    wifiMgr.disconnect();
 }
 
-// Current epoch, computed from the single sync plus elapsed time — no network
-// request. Returns 0 if the clock was never synced (caller falls back to an
-// uptime-based name).
+// Epoch from boot-time NTP sync + elapsed millis. Returns 0 if never synced.
 time_t currentEpoch() {
     if (!_timeSynced) return 0;
     return _syncedEpoch + (time_t)((millis() - _lastSyncMillis) / 1000);
 }
 
-void loop() {
-    // _state is the single source of truth for the lifecycle. A touch drives
-    // the transitions; we don't mirror the recorder's internal flag here.
-    switch (_state) {
-        case STATE_IDLE:
-            // Idle until a touch starts a recording.
-            if (button.pressed()) {
-                recorder.startRecording();
-                _state = STATE_RECORDING;
-            }
-            break;
-
-        case STATE_RECORDING:
-            // Recording until the next touch stops it.
-            if (button.pressed()) {
-                recorder.stopRecording();
-                _state = STATE_PROCESSING;
-            }
-            break;
-
-        case STATE_PROCESSING:
-            // Do the (slow) WiFi work once, then return to idle.
-            _handleRecording();
-            _state = STATE_IDLE;
-            break;
-    }
-
-    delay(100);
-}
-
-// Runs once per recording, in the PROCESSING state.
-void _handleRecording() {
+void _enqueueProcessing(const String& wavPath) {
     if (recorder.hasError()) {
-        // Write failed mid-way; the partial file was finalized. Signal it.
-        Serial.println("[Moneo] Recording FAILED (SD write error). File may be incomplete.");
-        _errorBlink();   // halts here, blinking the LED
+        DLOG("[Moneo] Write errors — file may be incomplete.");
+        _errorSignal();
         return;
     }
+    if (wavPath.isEmpty()) return;
 
-    String wavPath = recorder.lastRecordingPath();
-    if (wavPath.length() > 0) {
-        _processRecording(wavPath);
+    String* p = new String(wavPath);
+    if (xQueueSend(_procQueue, &p, 0) != pdTRUE) {
+        DLOGF("[Moneo] Queue full — skipping %s.\n", wavPath.c_str());
+        delete p;
+    }
+}
+
+// Background task (core 0). Processes one recording at a time; blocks when the
+// queue is empty. A new recording can start on core 1 while this runs.
+void _processorLoop() {
+    while (true) {
+        String* p;
+        xQueueReceive(_procQueue, &p, portMAX_DELAY);
+        _processRecording(*p);
+        delete p;
     }
 }
 
 void _processRecording(const String& wavPath) {
-    Serial.println("[Moneo] Recording complete. Connecting to WiFi...");
-
-    // Blink LED while connecting
-    digitalWrite(LED_BUILTIN, LED_ON);
-    delay(200);
-    digitalWrite(LED_BUILTIN, LED_OFF);
-
+    Serial.println("[Moneo] Connecting to WiFi...");
     if (!wifiMgr.connect()) {
-        Serial.println("[Moneo] WiFi failed.");
-        Serial.println("[Moneo] WAV file saved locally: " + wavPath);
-        // Graceful failure — the WAV is safe on the SD card
+        DLOGF("[Moneo] WiFi unavailable — %s saved locally.\n", wavPath.c_str());
         return;
     }
 
-    Serial.println("[Moneo] WiFi connected.");
-    Serial.printf("[Moneo] File saved: %s\n", wavPath.c_str());
+    Serial.printf("[Moneo] WiFi connected. File: %s\n", wavPath.c_str());
 
-    // TODO: AIClient integration — send the WAV to the AI and save notes.
-    // Enabled once AIClient is added to the repo.
+    // TODO: send WAV to AIClient, save transcript as .md — enable once AIClient is added.
     //
     // String notes = aiClient.generateNotes(wavPath);
-    // if (notes.isEmpty()) {
-    //     Serial.println("[Moneo] AI returned no notes.");
-    //     return;
-    // }
+    // if (notes.isEmpty()) { Serial.println("[Moneo] AI returned no notes."); return; }
     // String notesPath = wavPath;
     // notesPath.replace(".wav", ".md");          // e.g. rec_….wav → rec_….md
     // File f = SD.open(notesPath.c_str(), FILE_WRITE);
-    // if (f) {
-    //     f.print(notes);
-    //     f.close();
-    //     Serial.println("[Moneo] ✓ Notes saved: " + notesPath);
-    // } else {
-    //     Serial.println("[Moneo] Failed to save notes to SD.");
-    // }
+    // if (f) { f.print(notes); f.close(); Serial.println("[Moneo] Notes: " + notesPath); }
+    // else    { Serial.println("[Moneo] Failed to save notes."); }
 
-    Serial.println("[Moneo] Done! Touch pin to record again.");
+    wifiMgr.disconnect();
+    DLOGF("[Moneo] Processed: %s\n", wavPath.c_str());
 }
 
+// Hard halt for unrecoverable init failures (hardware is broken).
 void _errorBlink() {
     while (true) {
         digitalWrite(LED_BUILTIN, LED_ON);  delay(200);
         digitalWrite(LED_BUILTIN, LED_OFF); delay(200);
+    }
+}
+
+// Three quick flashes for a recoverable error; returns when done.
+void _errorSignal() {
+    for (int i = 0; i < 3; i++) {
+        digitalWrite(LED_BUILTIN, LED_ON);  delay(100);
+        digitalWrite(LED_BUILTIN, LED_OFF); delay(100);
     }
 }

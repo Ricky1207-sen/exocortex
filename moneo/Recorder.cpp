@@ -10,20 +10,22 @@ static const int FLUSH_STOP = -1;
 Recorder::Recorder()
     : _activeBuf(0), _dataLength(0),
       _recording(false), _writeError(false),
-      _flushQueue(nullptr), _writerDone(nullptr)
+      _flushQueue(nullptr), _writerDone(nullptr),
+      _captureTask_h(nullptr), _writerTask_h(nullptr)
 {
     _buf[0] = nullptr; _buf[1] = nullptr;
     _bufFill[0] = 0;   _bufFill[1] = 0;
 }
 
 bool Recorder::begin() {
+    if (_buf[0]) return true;   // already initialized
     if (!SD.begin(SD_CARD_PIN)) {
         DLOG("[Recorder] SD card mount failed!");
         return false;
     }
     DLOG("[Recorder] SD card mounted.");
 
-    // Two ping-pong buffers (2 x 160KB in PSRAM — trivial for the 8MB PSRAM).
+    // Two ping-pong buffers in PSRAM (2 × PSRAM_BUFFER_SIZE; trivial for the 8MB PSRAM).
     _buf[0] = (uint8_t*)ps_malloc(PSRAM_BUFFER_SIZE);
     _buf[1] = (uint8_t*)ps_malloc(PSRAM_BUFFER_SIZE);
     if (!_buf[0] || !_buf[1]) {
@@ -47,16 +49,13 @@ bool Recorder::begin() {
     }
     DLOGF("[Recorder] I2S initialized (%d Hz, %d-bit).\n",
           SAMPLE_RATE, BITS_PER_SAMPLE);
+
+    DLOG("[Recorder] Ready. Touch pin to start.");
     return true;
 }
 
-// The main sketch owns the clock (synced once at boot) and hands us the current
-// time, so we make no network request here.
-extern time_t currentEpoch();
-
 // ── Generate datetime filename ─────────────────────────────
-String Recorder::_generateFilename() {
-    time_t now = currentEpoch();
+String Recorder::_generateFilename(time_t now) {
     if (now > 0) {
         struct tm* lt = localtime(&now);
         char buf[32];
@@ -98,13 +97,7 @@ void Recorder::_writeWavHeader(File& f, uint32_t dataLen) {
     f.write((uint8_t*)&dataLen,     4);
 }
 
-// ── Append one full buffer to the WAV file ─────────────────
-// open → write → close, once per buffer. Keeping the file closed between
-// writes means a power loss can corrupt at most the latest buffer.
-//
-// Returns true only if the whole buffer was written. Called only by the writer
-// task, and only for a buffer the capture task is no longer touching, so no
-// lock is needed.
+// ── Append one buffer to the WAV file ──────────────────────────
 bool Recorder::_writeBufferToSD(uint8_t* data, size_t len) {
     if (len == 0) return true;
 
@@ -129,7 +122,7 @@ bool Recorder::_writeBufferToSD(uint8_t* data, size_t len) {
 }
 
 // ── Start ──────────────────────────────────────────────────
-void Recorder::startRecording() {
+void Recorder::startRecording(time_t now) {
     DLOG("[Recorder] Starting...");
     _writeError  = false;
     _dataLength  = 0;
@@ -137,9 +130,8 @@ void Recorder::startRecording() {
     _bufFill[0]  = 0;
     _bufFill[1]  = 0;
 
-    // Clock was already synced once at boot (see _syncTime in the main sketch),
-    // so _generateFilename() reads the real time straight from the RTC here.
-    _wavPath = _generateFilename();
+    xQueueReset(_flushQueue);   // discard stale items from any previous run
+    _wavPath = _generateFilename(now);
     DLOGF("[Recorder] File: %s\n", _wavPath.c_str());
 
     // Create the file and lay down a placeholder header, then close it.
@@ -155,10 +147,12 @@ void Recorder::startRecording() {
     _recording = true;
     digitalWrite(LED_BUILTIN, LED_ON);
 
+    // Capture: I2S reads + pointer arithmetic + one queue send per segment.
     xTaskCreatePinnedToCore([](void* arg){ ((Recorder*)arg)->_captureTask(); },
-                            "Capture", 4096, this, 5, nullptr, 1);
+                            "Capture", 4096, this, 5, &_captureTask_h, 1);
+    // Writer: SD open/write/close per segment; SD library needs more stack.
     xTaskCreatePinnedToCore([](void* arg){ ((Recorder*)arg)->_writerTask(); },
-                            "Writer",  8192, this, 3, nullptr, 1);
+                            "Writer",  8192, this, 3, &_writerTask_h,  1);
 
     DLOG("[Recorder] Recording started.");
 }
@@ -169,11 +163,12 @@ void Recorder::stopRecording() {
     _recording = false;      // capture finishes its current chunk, then exits
     digitalWrite(LED_BUILTIN, LED_OFF);
 
-    // Capture hands over its last partial buffer and posts FLUSH_STOP; the
-    // writer drains the queue and gives _writerDone. Wait for that exact
-    // signal instead of a blind fixed delay.
+    // Wait for the writer to drain the queue and signal completion.
     if (xSemaphoreTake(_writerDone, pdMS_TO_TICKS(10000)) != pdTRUE) {
-        DLOG("[Recorder] Warning: writer did not finish in time.");
+        DLOG("[Recorder] ERROR: writer timed out — force-stopping tasks.");
+        if (_captureTask_h) { vTaskDelete(_captureTask_h); _captureTask_h = nullptr; }
+        if (_writerTask_h)  { vTaskDelete(_writerTask_h);  _writerTask_h  = nullptr; }
+        _writeError = true;
     }
 
     _finalizeHeader();
@@ -204,13 +199,11 @@ void Recorder::_captureTask() {
         size_t space  = PSRAM_BUFFER_SIZE - _bufFill[_activeBuf];
         size_t toRead = min((size_t)I2S_BUFFER_SIZE, space);
 
-        // Blocks (sleeps) inside the driver until this chunk of audio arrives.
-        // No polling, no busy-spin — the mic wakes us when data is ready.
+        // Sleeps inside the I2S driver until the mic delivers a chunk.
         int n = _i2s.readBytes((char*)(_buf[_activeBuf] + _bufFill[_activeBuf]), toRead);
         if (n > 0) _bufFill[_activeBuf] += n;
 
-        // Buffer full → hand it to the writer and switch to the other buffer
-        // instantly, so capture never pauses while the full one is saved.
+        // Buffer full → hand to writer and flip instantly; capture never pauses.
         if (_bufFill[_activeBuf] >= PSRAM_BUFFER_SIZE) {
             int full = _activeBuf;
             _activeBuf = 1 - _activeBuf;   // 0<->1
@@ -219,8 +212,7 @@ void Recorder::_captureTask() {
         }
     }
 
-    // Recording stopped: hand over whatever is left in the current buffer,
-    // then tell the writer there are no more buffers and it can exit.
+    // Hand over the partial tail buffer, then signal the writer to exit.
     if (_bufFill[_activeBuf] > 0) {
         int last = _activeBuf;
         xQueueSend(_flushQueue, &last, portMAX_DELAY);
@@ -229,6 +221,7 @@ void Recorder::_captureTask() {
     xQueueSend(_flushQueue, &stop, portMAX_DELAY);
 
     DLOG("[Capture] Task finished.");
+    _captureTask_h = nullptr;
     vTaskDelete(nullptr);
 }
 
@@ -242,9 +235,8 @@ void Recorder::_writerTask() {
         xQueueReceive(_flushQueue, &idx, portMAX_DELAY);
         if (idx == FLUSH_STOP) break;
 
-        // Capture is filling the OTHER buffer right now, so this one is ours
-        // alone — no lock. A failed write flags the error; we keep draining the
-        // queue so capture never blocks, and the header is still finalized.
+        // Capture owns the OTHER buffer; this one is ours alone — no lock.
+        // On write failure, keep draining so capture never blocks.
         if (!_writeBufferToSD(_buf[idx], _bufFill[idx])) {
             _writeError = true;
         }
@@ -252,5 +244,6 @@ void Recorder::_writerTask() {
 
     DLOG("[Writer] Task finished.");
     xSemaphoreGive(_writerDone);   // let stopRecording() proceed
+    _writerTask_h = nullptr;
     vTaskDelete(nullptr);
 }

@@ -8,13 +8,11 @@
 //
 // The pad fires an interrupt that only sets a flag; pressed() is polled from
 // the main loop and returns true once per genuine, debounced press. It re-reads
-// the pad to reject brief electrical noise (a real press is still held when
-// polled here, while a noise spike has already decayed).
+// the pad to reject brief electrical noise. On ESP32-S3, a real press keeps the
+// reading above TOUCH_THRESHOLD; a noise spike has decayed below it by then.
 // ============================================================
 class TouchButton {
 public:
-    // pin: touch pin, threshold: touch trigger level, debounceMs: minimum gap
-    // between two accepted presses.
     void begin(int pin, int threshold, unsigned long debounceMs);
 
     // Returns true exactly once per real, debounced press.

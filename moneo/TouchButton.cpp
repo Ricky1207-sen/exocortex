@@ -21,9 +21,8 @@ bool TouchButton::pressed() {
     unsigned long now = millis();
     if (now - _lastMs < _debounceMs) return false;
 
-    // Confirm a real touch is still present. The interrupt can fire on brief
-    // electrical noise; a genuine press still reads above the threshold when we
-    // reach here, while a noise spike has already decayed and is rejected.
+    // ESP32-S3: touch values increase on contact; the ISR fires above threshold.
+    // A genuine press still reads high here; a noise spike has decayed away.
     if (touchRead(_pin) < _threshold) return false;
 
     _lastMs = now;
