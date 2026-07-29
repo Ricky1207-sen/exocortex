@@ -12,21 +12,21 @@
 //    Touch D1 → stop recording → device immediately ready for next recording
 //    Background: reconnect WiFi → upload / transcribe → disconnect WiFi
 //
-//  NOTE: AI note-generation (AIClient) is not wired in yet — those lines are
-//  commented out and marked TODO; enabled once AIClient is added to the repo.
+//  AIClient sends each completed WAV file to the configured provider and saves
+//  the generated notes beside it as a Markdown file.
 // ============================================================
 
 #include "Config.h"
 #include "Recorder.h"
 #include "TouchButton.h"
 #include "WiFiManager.h"
+#include "AIClient.h"
 #include <time.h>
-// #include "AIClient.h"   // TODO: enable when AIClient is added
 
 Recorder    recorder;
 TouchButton button;
 WiFiManager wifiMgr;
-// AIClient aiClient;       // TODO: enable when AIClient is added
+AIClient    aiClient;
 
 // Queue of WAV paths pending upload/transcription (see _processorLoop).
 QueueHandle_t _procQueue;
@@ -49,8 +49,10 @@ void setup() {
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LED_OFF);
 
-    // TODO: detect AI provider once AIClient is integrated
-    // if (!aiClient.begin()) { Serial.println("[FATAL] AI client init failed."); _errorBlink(); }
+    if (!aiClient.begin()) {
+        Serial.println("[FATAL] AI client init failed. Check API key in Config.h");
+        _errorBlink();
+    }
 
     if (!recorder.begin()) {
         Serial.println("[FATAL] Recorder init failed.");
@@ -65,6 +67,7 @@ void setup() {
     _procQueue = xQueueCreate(4, sizeof(String*));
     xTaskCreatePinnedToCore([](void*){ _processorLoop(); },
                             "Processor", 8192, nullptr, 2, nullptr, 0);
+    Serial.printf("[Moneo] AI Provider: %s\n", aiClient.providerName());
 }
 
 void loop() {
@@ -141,15 +144,23 @@ void _processRecording(const String& wavPath) {
 
     Serial.printf("[Moneo] WiFi connected. File: %s\n", wavPath.c_str());
 
-    // TODO: send WAV to AIClient, save transcript as .md — enable once AIClient is added.
-    //
-    // String notes = aiClient.generateNotes(wavPath);
-    // if (notes.isEmpty()) { Serial.println("[Moneo] AI returned no notes."); return; }
-    // String notesPath = wavPath;
-    // notesPath.replace(".wav", ".md");          // e.g. rec_….wav → rec_….md
-    // File f = SD.open(notesPath.c_str(), FILE_WRITE);
-    // if (f) { f.print(notes); f.close(); Serial.println("[Moneo] Notes: " + notesPath); }
-    // else    { Serial.println("[Moneo] Failed to save notes."); }
+    String notes = aiClient.generateNotes(wavPath);
+    if (notes.isEmpty()) {
+        Serial.println("[Moneo] AI returned no notes.");
+        wifiMgr.disconnect();
+        return;
+    }
+
+    String notesPath = wavPath;
+    notesPath.replace(".wav", ".md");
+    File f = SD.open(notesPath.c_str(), FILE_WRITE);
+    if (f) {
+        f.print(notes);
+        f.close();
+        Serial.println("[Moneo] Notes: " + notesPath);
+    } else {
+        Serial.println("[Moneo] Failed to save notes.");
+    }
 
     wifiMgr.disconnect();
     DLOGF("[Moneo] Processed: %s\n", wavPath.c_str());
