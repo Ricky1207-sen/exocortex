@@ -1,33 +1,16 @@
-// ============================================================
-//  MONEO
-//  moneo.ino — Main Sketch
-//
-//  Board:  Seeed Studio XIAO ESP32S3 Sense
-//  PSRAM:  Tools → PSRAM → OPI PSRAM  ← MUST ENABLE
-//
-//  Flow:
-//    Touch D1 → start recording (LED ON)
-//    Speak for as long as needed (10s segments flushed to SD)
-//    Touch D1 → stop recording (LED OFF)
-//    Device connects to WiFi (WiFiMulti picks the strongest known network)
-//    WAV file is saved on the SD card
-//
-//  NOTE: AI note-generation (AIClient) is not part of this build yet. Those
-//  lines are commented out and marked TODO; they will be wired in once
-//  AIClient is added to the repo.
-// ============================================================
+
 
 #include "Config.h"
 #include "Recorder.h"
 #include "TouchButton.h"
 #include "WiFiManager.h"
+#include "AIClient.h"
 #include <time.h>
-// #include "AIClient.h"   // TODO: enable when AIClient is added
 
 Recorder    recorder;
 TouchButton button;
 WiFiManager wifiMgr;
-// AIClient aiClient;       // TODO: enable when AIClient is added
+AIClient    aiClient;
 
 // The device is always in exactly one of these states.
 enum AppState { STATE_IDLE, STATE_RECORDING, STATE_PROCESSING };
@@ -45,17 +28,17 @@ void setup() {
     while (!Serial && millis() < serialTimeout) { delay(10); }
 
     Serial.println("╔══════════════════════════════════╗");
-    Serial.println("║         MONEO — Starting         ║");
+    Serial.println("║       MONEO V2 — Starting        ║");
     Serial.println("╚══════════════════════════════════╝");
 
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LED_OFF);
 
-    // TODO: detect AI provider once AIClient is integrated
-    // if (!aiClient.begin()) {
-    //     Serial.println("[FATAL] AI client init failed. Check API key in Config.h");
-    //     _errorBlink();
-    // }
+    // Detect AI provider from key
+    if (!aiClient.begin()) {
+        Serial.println("[FATAL] AI client init failed. Check API key in Config.h");
+        _errorBlink();
+    }
 
     // Init recorder
     if (!recorder.begin()) {
@@ -69,6 +52,7 @@ void setup() {
     // ESP32's internal RTC keeps time on its own — no repeat NTP requests.
     _syncTime();
 
+    Serial.printf("[Moneo] AI Provider: %s\n", aiClient.providerName());
     Serial.println("[Moneo] Ready. Touch pin to start.");   // now truly ready
 }
 
@@ -121,7 +105,7 @@ void loop() {
             break;
 
         case STATE_PROCESSING:
-            // Do the (slow) WiFi work once, then return to idle.
+            // Do the (slow) WiFi + AI work once, then return to idle.
             _handleRecording();
             _state = STATE_IDLE;
             break;
@@ -154,33 +138,38 @@ void _processRecording(const String& wavPath) {
     digitalWrite(LED_BUILTIN, LED_OFF);
 
     if (!wifiMgr.connect()) {
-        Serial.println("[Moneo] WiFi failed.");
+        Serial.println("[Moneo] WiFi failed — notes not generated.");
         Serial.println("[Moneo] WAV file saved locally: " + wavPath);
-        // Graceful failure — the WAV is safe on the SD card
+        // Graceful failure — WAV is safe on SD
         return;
     }
 
-    Serial.println("[Moneo] WiFi connected.");
-    Serial.printf("[Moneo] File saved: %s\n", wavPath.c_str());
+    Serial.println("[Moneo] WiFi connected. Sending to AI...");
+    Serial.printf("[Moneo] File: %s\n", wavPath.c_str());
 
-    // TODO: AIClient integration — send the WAV to the AI and save notes.
-    // Enabled once AIClient is added to the repo.
-    //
-    // String notes = aiClient.generateNotes(wavPath);
-    // if (notes.isEmpty()) {
-    //     Serial.println("[Moneo] AI returned no notes.");
-    //     return;
-    // }
-    // String notesPath = wavPath;
-    // notesPath.replace(".wav", ".md");          // e.g. rec_….wav → rec_….md
-    // File f = SD.open(notesPath.c_str(), FILE_WRITE);
-    // if (f) {
-    //     f.print(notes);
-    //     f.close();
-    //     Serial.println("[Moneo] ✓ Notes saved: " + notesPath);
-    // } else {
-    //     Serial.println("[Moneo] Failed to save notes to SD.");
-    // }
+    // Call AI — direct audio → notes
+    String notes = aiClient.generateNotes(wavPath);
+
+    if (notes.isEmpty()) {
+        Serial.println("[Moneo] AI returned no notes.");
+        return;
+    }
+
+    // Save notes beside WAV file
+    // e.g. /rec_20240518_143022.wav → /rec_20240518_143022.md
+    String notesPath = wavPath;
+    notesPath.replace(".wav", ".md");
+
+    File f = SD.open(notesPath.c_str(), FILE_WRITE);
+    if (f) {
+        f.print(notes);
+        f.close();
+        Serial.println("[Moneo] ✓ Notes saved: " + notesPath);
+    } else {
+        Serial.println("[Moneo] Failed to save notes to SD.");
+        Serial.println("[Moneo] Notes content:");
+        Serial.println(notes);
+    }
 
     Serial.println("[Moneo] Done! Touch pin to record again.");
 }
